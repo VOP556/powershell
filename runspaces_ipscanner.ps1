@@ -283,6 +283,8 @@ function Get-NetworkRange( [String]$IP, [String]$Mask ) {
 
 function test-IPAddresses{
     <#
+    .Author
+      Jörg Zimmermann www.burningmountain.de
     .Synopsis
       Does a icmp ping for all IPs in Network
     .Description
@@ -291,57 +293,100 @@ function test-IPAddresses{
       A range of IPAddresses to scan as [String[]]
     .Parameter maxthreads
       The maximum threads to do the work as Integer - Default = 5
+    .Parameter showOffline
+      doesn't filter out the offline IPAddresses
+    .Parameter showNames
+      will resolve the IPAddresses to Names (with -showOffline Offline IPs too)
+    .Example
+      test-IPAddresses -IPAddresses [String[]] 
+      will test all the IPAddresses in the StringArray
+      
+      [Array[String[]]] | test-IPAddresses 
+      will test every StringArray in Pipeline multithreaded
     #>
     [CmdLetBinding()]
     param(
+        [Parameter( Mandatory=$true,
+                    ValueFromPipeline=$true)]
         [String[]]$IPAddresses,
-        [int]$maxthreads = 5
+        [int]$maxthreads = 5,
+        [switch]$showOffline = $false,
+        [switch]$showNames = $false
     )
 
-    
-    $RunspacePool = [Runspacefactory]::CreateRunspacePool(1,$maxthreads)
-    $RunspacePool.open()
-    #the job that has to be done
-    $ScriptBlock = {
-        param (
-        [STRING]$IPAddress
-        )
-        $result = Test-Connection -Count 1 -ComputerName $IPAddress -Quiet
-        return $result
+    Begin {
+      $RunspacePool = [Runspacefactory]::CreateRunspacePool(1,$maxthreads)
+      $RunspacePool.open()
+      #the job that has to be done
+      $ScriptBlock = {
+         param (
+          [STRING]$IPAddress,
+          [bool]$showNames
+          )
+          $ICMP = " " 
+          $Test = Test-Connection -Count 1 -ComputerName $IPAddress -ErrorAction SilentlyContinue
+          if ( $Test) {
+            $ICMP = "success"
+          } 
+          $result = New-Object psobject -Property @{
+            IPAddress = $IPAddress
+            ICMP      = $ICMP
+          }
+          
+          if ($showNames) {
+            $NameHost = (Resolve-DnsName -Name $IPAddress -NoHostsFile -Type PTR).NameHost
+            $result | Add-Member -MemberType NoteProperty -Name NameHost -Value $NameHost
+          }
+          return $result
+      }
+      #the job array
+      $Jobs = @()
     }
+    Process {
+      #the magic
+      $IPAddresses | ForEach-Object {
+          $Job = [powershell]::Create().addscript($ScriptBlock).addargument($_).addargument($showNames)
+          $Job.RunSpacePool = $RunspacePool
+          $Jobs += New-Object PSObject -Property @{
+              Pipe = $Job
+              Result = $Job.BeginInvoke()
+          }
+      }
 
-    #the job array
-    $Jobs = @()
 
-    #the magic
-    $IPAddresses | ForEach-Object {
-        $Job = [powershell]::Create().addscript($ScriptBlock).addargument($_)
-        $Job.RunSpacePool = $RunspacePool
-        $Jobs += New-Object PSObject -Property @{
-            Pipe = $Job
-            IPAddress = $_
-            Result = $Job.BeginInvoke()
+    }
+    End {
+      
+      #wait for completion
+      Write-Verbose "Waiting.." 
+      Do {
+          Start-Sleep -Seconds 1
+          } While ( $Jobs.Result.IsCompleted -contains $false )
+      Write-Verbose "All jobs completed!"
+
+      #get your results
+      $Results = @()
+      ForEach ($Job in $Jobs){   
+          $Results += $Job.pipe.EndInvoke($Job.result)
+      }
+
+      
+      #check your results
+      if ($showOffline) {
+        if ($showNames) {
+          Write-Output ($Results | Select-Object IPAddress,ICMP,NameHost)
+        }else {
+          Write-Output ($Results | Select-Object IPAddress,ICMP)
         }
+      }
+      elseif ($showNames) {
+        ($Results.where({$_.ICMP -eq "success"})  | Select-Object IPAddress,ICMP,NameHost)
+      }
+      else {
+        Write-Output ($Results.where({$_.ICMP -eq "success"})  | Select-Object IPAddress,ICMP)
+      }
+      
+
+      $RunspacePool.close()
     }
-
-    #wait for completion
-    Write-Verbose "Waiting.." 
-    Do {
-        
-        Start-Sleep -Seconds 1
-        } While ( $Jobs.Result.IsCompleted -contains $false )
-    Write-Verbose "All jobs completed!"
-
-    #get your results
-    $Results = @()
-    ForEach ($Job in $Jobs){   
-        $Results += new-object psobject -property @{
-            IPAddress = $Job.IPAddress
-            Result = $Job.Pipe.EndInvoke($Job.Result)
-        }
-    }
-
-    
-    #check your results
-    Write-Output ($Results.where({$_.Result -eq $true})  | Select-Object IPAddress)
 }
