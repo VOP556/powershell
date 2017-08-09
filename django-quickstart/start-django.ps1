@@ -60,7 +60,7 @@ services:
 $DockerEntryPoint = '#!/bin/bash
 echo "Starting Django"
 
-if [ ! -d /srv/###PROJECT### ]
+if [ ! -d /srv/src/###PROJECT### ]
 then
   echo "Creating Project..."
   mkdir -p /srv/src/###PROJECT###
