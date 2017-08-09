@@ -14,7 +14,6 @@ python3 \
 python3-django \
 python3-psycopg2 \
 dos2unix
-
 RUN mkdir -p /srv/ship && mkdir -p /srv/src
 ADD ship/* /srv/ship/
 RUN chmod +x /srv/ship/docker-entrypoint.sh
@@ -35,7 +34,7 @@ services:
     user: postgres
     image: postgres
     environment:
-      POSTGRES_PASSWORD: ###POSTGRES_PASSWORD###
+      POSTGRES_PASSWORD: "###POSTGRES_PASSWORD###"
       POSTGRES_USER: django
       POSTGRES_DB: ###PROJECT###
     healthcheck:
@@ -46,6 +45,8 @@ services:
   django:
     build: .
     image: dev/###PROJECT###
+    volumes:
+      - "./src:/srv/src"
     ports:
       - "8000:8000"
     depends_on:
@@ -58,18 +59,14 @@ services:
 
 $DockerEntryPoint = '#!/bin/bash
 echo "Starting Django"
-# convert from dos to unix
 
-
-if [ ! -d /srv/src/###PROJECT### ]
+if [ ! -d /srv/###PROJECT### ]
 then
   echo "Creating Project..."
-  cd /srv/src/ && django-admin startproject ###PROJECT###
-  cp /srv/ship/settings.py /srv/src/###PROJECT###/###PROJECT###/
-
+  mkdir -p /srv/src/###PROJECT###
+  django-admin startproject ###PROJECT### /srv/src/###PROJECT### && \
+  cp -rfv /srv/ship/settings.py /srv/src/###PROJECT###/###PROJECT###/ 
 fi
-
-for file in $(find /srv/src/###PROJECT### -type f) ; do perl -pi -e "s/\r\n/\n/g" $file; done 
 
 cd /srv/src/###PROJECT###
 python3 manage.py makemigrations           # Make database migrations
@@ -80,6 +77,7 @@ python3 manage.py collectstatic --noinput  # Collect static files
 # Start development server
 echo "Starting development server on port 8000"
 python3 manage.py runserver 0.0.0.0:8000            # Start development server
+
 '
 
 $SettingsFile = "
@@ -193,7 +191,8 @@ STATIC_URL = '/static/'
 
 
 "
-
+#ensure NetConnectionProfile for DockerNAT is set to Private, to make SMB-Shares available for mounting volumes into containers
+get-netadapter *DockerNAT* | Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private
 
 $POSTGRES_PASSWORD = ( -join ((0x30..0x39) + ( 0x41..0x5A) + ( 0x61..0x7A) | Get-Random -Count 16  | ForEach-Object {[char]$_}) )
 New-Item -Path $ProjectDir -ItemType Directory -Force -Verbose | Out-Null
@@ -202,8 +201,8 @@ $SrcDir = New-Item -Path $SrcDir -ItemType Directory -Force -Verbose
 
 $SECRET_KEY = ( -join ((0x21..0x26) + (0x28..0x2c) + (0x30..0x39) + ( 0x41..0x5A) + ( 0x61..0x7A) | Get-Random -Count 128  | ForEach-Object {[char]$_}) )
 
-$SettingsFile.Replace("###PROJECT###",$Project).Replace('###PROJECTDIR###',$ProjectDir.FullName).Replace('###SECRET_KEY###', $SECRET_KEY).Replace('###POSTGRES_PASSWORD###', $POSTGRES_PASSWORD) | Out-File -FilePath ($ShipDir.FullName + '\settings.py') -Encoding utf8 -Force -Verbose
-$Dockerfile.Replace("###PROJECT###",$Project).Replace('###PROJECTDIR###',$ProjectDir.FullName) | Out-File -FilePath ($ProjectDir + '\Dockerfile') -Encoding utf8 -Force -Verbose
-$DockerEntryPoint.Replace("###PROJECT###",$Project).Replace('###PROJECTDIR###',$ProjectDir.FullName) | Out-File -FilePath ($ShipDir.FullName + '\docker-entrypoint.sh') -Encoding ascii -Force -Verbose
-$DockerCompose.Replace("###PROJECT###",$Project).Replace('###PROJECTDIR###',$ProjectDir.FullName).Replace('###POSTGRES_PASSWORD###', $POSTGRES_PASSWORD) | Out-File -FilePath ($ProjectDir + '\docker-compose.yml') -Encoding utf8 -Force -Verbose
+$SettingsFile.Replace("###PROJECT###",$Project).Replace('###PROJECTDIR###',$ProjectDir).Replace('###SECRET_KEY###', $SECRET_KEY).Replace('###POSTGRES_PASSWORD###', $POSTGRES_PASSWORD) | Out-File -FilePath ($ShipDir.FullName + '\settings.py') -Encoding utf8 -Force -Verbose
+$Dockerfile.Replace("###PROJECT###",$Project).Replace('###PROJECTDIR###',$ProjectDir) | Out-File -FilePath ($ProjectDir + '\Dockerfile') -Encoding utf8 -Force -Verbose
+$DockerEntryPoint.Replace("###PROJECT###",$Project).Replace('###PROJECTDIR###',$ProjectDir) | Out-File -FilePath ($ShipDir.FullName + '\docker-entrypoint.sh') -Encoding ascii -Force -Verbose
+$DockerCompose.Replace("###PROJECT###",$Project).Replace('###PROJECTDIR###',$ProjectDir).Replace('###POSTGRES_PASSWORD###', $POSTGRES_PASSWORD) | Out-File -FilePath ($ProjectDir + '\docker-compose.yml') -Encoding utf8 -Force -Verbose
 
