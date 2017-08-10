@@ -58,6 +58,17 @@ services:
 '
 
 $DockerEntryPoint = '#!/bin/bash
+#sighandler
+
+sighandler_INT() {
+    echo "Habe das Signal SIGINT/SIGTERM empfangen"
+    echo "Dumping DB to /src/dump.json"
+    python3 /srv/src/###PROJECT###/manage.py dumpdata --exclude auth.permission --exclude contenttypes > /srv/src/dump.json
+    exit 0;
+
+}
+
+
 echo "Starting Django"
 
 if [ ! -d /srv/src/###PROJECT### ]
@@ -69,10 +80,24 @@ then
 fi
 
 cd /srv/src/###PROJECT###
+
+
+# create tables from models
+
 python3 manage.py makemigrations           # Make database migrations
 python3 manage.py migrate                  # Apply database migrations
 python3 manage.py collectstatic --noinput  # Collect static files
 
+#import db
+if [ -e /srv/src/dump.json ]
+then
+  python3 manage.py loaddata /srv/src/dump.json
+fi
+
+
+
+#sigint handler
+trap sighandler_INT EXIT
 
 # Start development server
 echo "Starting development server on port 8000"
@@ -194,14 +219,21 @@ STATIC_URL = '/static/'
 #ensure NetConnectionProfile for DockerNAT is set to Private, to make SMB-Shares available for mounting volumes into containers
 get-netadapter *DockerNAT* | Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private
 
-$POSTGRES_PASSWORD = ( -join ((0x30..0x39) + ( 0x41..0x5A) + ( 0x61..0x7A) | Get-Random -Count 16  | ForEach-Object {[char]$_}) )
+
+$SECRET_KEY = ''
+$POSTGRES_PASSWORD = ''
+
 New-Item -Path $ProjectDir -ItemType Directory -Force -Verbose | Out-Null
 $ShipDir = New-Item -Path $ShipDir -ItemType Directory -Force -Verbose
 $SrcDir = New-Item -Path $SrcDir -ItemType Directory -Force -Verbose
+if (Test-Path -Path (Join-Path $SrcDir.FullName -ChildPath "$Project/$Project/settings.py")){
+    $POSTGRES_PASSWORD = (get-content -Path (Join-Path $SrcDir.FullName -ChildPath "$Project/$Project/settings.py") | Where-Object {$_ -match 'PASSWORD'}).Split("= ")[-1] -replace("'","") -replace(",","")
+}else {
+    $POSTGRES_PASSWORD = ( -join ((0x30..0x39) + ( 0x41..0x5A) + ( 0x61..0x7A) | Get-Random -Count 16  | ForEach-Object {[char]$_}) )
+    $SECRET_KEY = ( -join ((0x21..0x26) + (0x28..0x2c) + (0x30..0x39) + ( 0x41..0x5A) + ( 0x61..0x7A) | Get-Random -Count 128  | ForEach-Object {[char]$_}) )
+    $SettingsFile.Replace("###PROJECT###",$Project).Replace('###PROJECTDIR###',$ProjectDir).Replace('###SECRET_KEY###', $SECRET_KEY).Replace('###POSTGRES_PASSWORD###', $POSTGRES_PASSWORD) | Out-File -FilePath ($ShipDir.FullName + '\settings.py') -Encoding utf8 -Force -Verbose
+}
 
-$SECRET_KEY = ( -join ((0x21..0x26) + (0x28..0x2c) + (0x30..0x39) + ( 0x41..0x5A) + ( 0x61..0x7A) | Get-Random -Count 128  | ForEach-Object {[char]$_}) )
-
-$SettingsFile.Replace("###PROJECT###",$Project).Replace('###PROJECTDIR###',$ProjectDir).Replace('###SECRET_KEY###', $SECRET_KEY).Replace('###POSTGRES_PASSWORD###', $POSTGRES_PASSWORD) | Out-File -FilePath ($ShipDir.FullName + '\settings.py') -Encoding utf8 -Force -Verbose
 $Dockerfile.Replace("###PROJECT###",$Project).Replace('###PROJECTDIR###',$ProjectDir) | Out-File -FilePath ($ProjectDir + '\Dockerfile') -Encoding utf8 -Force -Verbose
 $DockerEntryPoint.Replace("###PROJECT###",$Project).Replace('###PROJECTDIR###',$ProjectDir) | Out-File -FilePath ($ShipDir.FullName + '\docker-entrypoint.sh') -Encoding ascii -Force -Verbose
 $DockerCompose.Replace("###PROJECT###",$Project).Replace('###PROJECTDIR###',$ProjectDir).Replace('###POSTGRES_PASSWORD###', $POSTGRES_PASSWORD) | Out-File -FilePath ($ProjectDir + '\docker-compose.yml') -Encoding utf8 -Force -Verbose
