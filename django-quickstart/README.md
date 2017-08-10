@@ -24,3 +24,5 @@ the projectpath will be created and in the end you will have 2 containers. One f
 ```
 you can live edit it there.
 
+your data will persist on container recreation cause on EXIT call the db will be dumped to /srv/src/dump.json. if you do not want this, delete the file after it was created
+
